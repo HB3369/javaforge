@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch Spring Boot (via Maven)",
+      "type": "java",
+      "request": "launch",
+      "mainClass": "",
+      "preLaunchTask": "Run Spring Boot App"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  // --- Java ---
+  "java.home": "C:/Program Files/Java/jdk-17.0.1", // Cambia a tu JDK real (Spring Boot 3 usa JDK 17+)
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "java.compile.nullAnalysis.mode": "automatic",
+  "java.format.enabled": true,
+  "java.format.settings.url": "eclipse-formatter.xml", // Opcional: tu formato propio
+  "java.errors.incompleteClasspath.severity": "warning",
+  "java.referencesCodeLens.enabled": true,
+  "java.codeGeneration.useBlocks": true,
+  // --- Maven ---
+  "maven.executable.path": "mvn",
+  "maven.pomfile.autoUpdateEffectivePOM": true,
+  "maven.terminal.useJavaHome": true,
+  // --- Archivos ---
+  "files.associations": {
+    "*.java": "java",
+    "pom.xml": "xml"
+  },
+  // --- Spring Boot ---
+  "spring-boot.ls.java.home": "C:/Program Files/Java/jdk-17.0.1",
+  "spring-boot.ls.log.level": "INFO",
+  // --- Editor ---
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  }
+}

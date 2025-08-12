@@ -5,11 +5,14 @@ import (
     "os"
     "path/filepath"
     "strings"
+    "regexp"
+    "hash/fnv"
 
     "github.com/spf13/cobra"
 )
 
 var serviceName string
+var database string
 
 var createCmd = &cobra.Command{
     Use:   "create",
@@ -30,15 +33,61 @@ var createCmd = &cobra.Command{
 func init() {
     rootCmd.AddCommand(createCmd)
     createCmd.Flags().StringVarP(&serviceName, "name", "n", "", "Service name (required)")
+    createCmd.Flags().StringVarP(&database, "db", "d", "", "Database type (postgres, mysql)")
     createCmd.MarkFlagRequired("name")
 }
 
+// Función para normalizar nombres (quitar guiones, espacios, caracteres especiales)
+func normalizeJavaName(name string) string {
+    // Remover guiones, espacios y otros caracteres especiales
+    reg := regexp.MustCompile(`[^a-zA-Z0-9]`)
+    cleaned := reg.ReplaceAllString(name, "")
+    
+    // Convertir primera letra a mayúscula
+    if len(cleaned) > 0 {
+        cleaned = strings.ToUpper(string(cleaned[0])) + strings.ToLower(cleaned[1:])
+    }
+    
+    return cleaned
+}
+
+// Función para normalizar package names (solo minúsculas, sin caracteres especiales)
+func normalizePackageName(name string) string {
+    reg := regexp.MustCompile(`[^a-zA-Z0-9]`)
+    cleaned := reg.ReplaceAllString(name, "")
+    return strings.ToLower(cleaned)
+}
+
+// Función para generar puerto único basado en el nombre del servicio
+func generateServicePort(serviceName string) int {
+    h := fnv.New32a()
+    h.Write([]byte(serviceName))
+    // Puerto entre 8080-8999 para evitar conflictos
+    return 8080 + int(h.Sum32()%920)
+}
+
+func generateDBPort(serviceName, dbType string) int {
+    h := fnv.New32a()
+    h.Write([]byte(serviceName + dbType))
+    
+    switch dbType {
+    case "postgres":
+        return 5432 + int(h.Sum32()%100) // 5432-5531
+    case "mysql":
+        return 3306 + int(h.Sum32()%100) // 3306-3405
+    default:
+        return 5432
+    }
+}
+
 func createJavaService(name string) {
-    // Crear estructura de directorios
     baseDir := name
+    packageName := normalizePackageName(name)
+    
+    // Crear estructura de directorios
     dirs := []string{
-        filepath.Join(baseDir, "src", "main", "java", "com", strings.ToLower(name)),
-        filepath.Join(baseDir, "src", "test", "java", "com", strings.ToLower(name)),
+        filepath.Join(baseDir, "src", "main", "java", "com", packageName),
+        filepath.Join(baseDir, "src", "test", "java", "com", packageName),
         filepath.Join(baseDir, "src", "main", "resources"),
         filepath.Join(baseDir, ".github", "workflows"),
     }
@@ -48,21 +97,57 @@ func createJavaService(name string) {
     }
 
     // Generar archivos
-    generatePomXML(baseDir, name)
-    generateMainClass(baseDir, name)
+    generatePomXML(baseDir, name, packageName)
+    generateMainClass(baseDir, name, packageName)
+    generateApplicationProperties(baseDir, name, packageName)
     generateDockerfile(baseDir)
+    generateDockerCompose(baseDir, name, packageName)
     generateGitHubActions(baseDir, name)
     
     fmt.Printf("📁 Created directory structure for %s\n", name)
+    if database != "" {
+        fmt.Printf("🗄️  Added %s database configuration\n", database)
+    }
 }
 
-func generatePomXML(baseDir, name string) {
+func generatePomXML(baseDir, name, packageName string) {
+    var dbDependencies string
+    
+    if database == "postgres" {
+        dbDependencies = `        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>`
+    } else if database == "mysql" {
+        dbDependencies = `        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>`
+    }
+
     content := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
          http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.0</version>
+        <relativePath/>
+    </parent>
 
     <groupId>com.%s</groupId>
     <artifactId>%s</artifactId>
@@ -75,24 +160,22 @@ func generatePomXML(baseDir, name string) {
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
-        <spring.boot.version>3.2.0</spring.boot.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
-            <version>${spring.boot.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
-            <version>${spring.boot.version}</version>
         </dependency>
+%s
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-            <version>${spring.boot.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -102,17 +185,17 @@ func generatePomXML(baseDir, name string) {
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-                <version>${spring.boot.version}</version>
             </plugin>
         </plugins>
     </build>
-</project>`, strings.ToLower(name), name, name)
+</project>`, packageName, name, normalizeJavaName(name), dbDependencies)
     
     os.WriteFile(filepath.Join(baseDir, "pom.xml"), []byte(content), 0644)
 }
 
-func generateMainClass(baseDir, name string) {
-    className := strings.Title(name) + "Application"
+func generateMainClass(baseDir, name, packageName string) {
+    className := normalizeJavaName(name) + "Application"
+    
     content := fmt.Sprintf(`package com.%s;
 
 import org.springframework.boot.SpringApplication;
@@ -132,10 +215,64 @@ public class %s {
     public String health() {
         return "🚀 %s is running!";
     }
-}`, strings.ToLower(name), className, className, name)
+}`, packageName, className, className, normalizeJavaName(name))
     
-    filePath := filepath.Join(baseDir, "src", "main", "java", "com", strings.ToLower(name), className+".java")
+    filePath := filepath.Join(baseDir, "src", "main", "java", "com", packageName, className+".java")
     os.WriteFile(filePath, []byte(content), 0644)
+}
+
+func generateApplicationProperties(baseDir, name, packageName string) {
+    servicePort := generateServicePort(name)
+    var content string
+    
+    if database == "postgres" {
+        dbPort := generateDBPort(name, "postgres")
+        content = fmt.Sprintf(`# %s Configuration
+server.port=%d
+
+# Database Configuration
+spring.datasource.url=jdbc:postgresql://localhost:%d/%s
+spring.datasource.username=$${DB_USERNAME:user}
+spring.datasource.password=$${DB_PASSWORD:password}
+spring.datasource.driver-class-name=org.postgresql.Driver
+
+# JPA Configuration
+spring.jpa.hibernate.ddl-auto=validate
+spring.jpa.show-sql=false
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+
+# Management endpoints
+management.endpoints.web.exposure.include=health,info,metrics
+management.endpoint.health.show-details=always`, normalizeJavaName(name), servicePort, dbPort, packageName)
+    } else if database == "mysql" {
+        dbPort := generateDBPort(name, "mysql")
+        content = fmt.Sprintf(`# %s Configuration
+server.port=%d
+
+# Database Configuration
+spring.datasource.url=jdbc:mysql://localhost:%d/%s
+spring.datasource.username=$${DB_USERNAME:user}
+spring.datasource.password=$${DB_PASSWORD:password}
+spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+
+# JPA Configuration
+spring.jpa.hibernate.ddl-auto=validate
+spring.jpa.show-sql=false
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQLDialect
+
+# Management endpoints
+management.endpoints.web.exposure.include=health,info,metrics
+management.endpoint.health.show-details=always`, normalizeJavaName(name), servicePort, dbPort, packageName)
+    } else {
+        content = fmt.Sprintf(`# %s Configuration
+server.port=%d
+
+# Management endpoints
+management.endpoints.web.exposure.include=health,info,metrics
+management.endpoint.health.show-details=always`, normalizeJavaName(name), servicePort)
+    }
+    
+    os.WriteFile(filepath.Join(baseDir, "src", "main", "resources", "application.properties"), []byte(content), 0644)
 }
 
 func generateDockerfile(baseDir string) {
@@ -143,7 +280,7 @@ func generateDockerfile(baseDir string) {
 WORKDIR /app
 COPY pom.xml .
 COPY src ./src
-RUN ./mvnw clean package -DskipTests
+RUN mvn clean package -DskipTests
 
 FROM eclipse-temurin:17-jre
 WORKDIR /app
@@ -152,6 +289,79 @@ EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]`
     
     os.WriteFile(filepath.Join(baseDir, "Dockerfile"), []byte(content), 0644)
+}
+
+func generateDockerCompose(baseDir, name, packageName string) {
+    servicePort := generateServicePort(name)
+    var content string
+    
+    if database == "postgres" {
+        dbPort := generateDBPort(name, "postgres")
+        content = fmt.Sprintf(`version: '3.8'
+services:
+  %s:
+    build: .
+    ports:
+      - "%d:%d"
+    environment:
+      - DB_USERNAME=user
+      - DB_PASSWORD=password
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:%d/%s
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:15
+    ports:
+      - "%d:%d"
+    environment:
+      - POSTGRES_DB=%s
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:`, packageName, servicePort, servicePort, dbPort, packageName, dbPort, dbPort, packageName)
+    } else if database == "mysql" {
+        dbPort := generateDBPort(name, "mysql")
+        content = fmt.Sprintf(`version: '3.8'
+services:
+  %s:
+    build: .
+    ports:
+      - "%d:%d"
+    environment:
+      - DB_USERNAME=user
+      - DB_PASSWORD=password
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:%d/%s
+    depends_on:
+      - mysql
+
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "%d:%d"
+    environment:
+      - MYSQL_DATABASE=%s
+      - MYSQL_USER=user
+      - MYSQL_PASSWORD=password
+      - MYSQL_ROOT_PASSWORD=rootpassword
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  mysql_data:`, packageName, servicePort, servicePort, dbPort, packageName, dbPort, dbPort, packageName)
+    } else {
+        content = fmt.Sprintf(`version: '3.8'
+services:
+  %s:
+    build: .
+    ports:
+      - "%d:%d"`, packageName, servicePort, servicePort)
+    }
+    
+    os.WriteFile(filepath.Join(baseDir, "docker-compose.yml"), []byte(content), 0644)
 }
 
 func generateGitHubActions(baseDir, name string) {
@@ -176,11 +386,18 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
     
+    - name: Cache Maven dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.m2
+        key: $${{ runner.os }}-m2-$${{ hashFiles('**/pom.xml') }}
+        restore-keys: $${{ runner.os }}-m2
+    
     - name: Run tests
       run: mvn clean test
     
     - name: Build application
-      run: mvn clean package -DskipTests`, name)
+      run: mvn clean package -DskipTests`, normalizeJavaName(name))
     
     os.WriteFile(filepath.Join(baseDir, ".github", "workflows", "ci.yml"), []byte(content), 0644)
 }

@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  orderservice:
+    build: .
+    ports:
+      - "8397:8397"
+    environment:
+      - DB_USERNAME=user
+      - DB_PASSWORD=password
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5522/orderservice
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:15
+    ports:
+      - "5522:5522"
+    environment:
+      - POSTGRES_DB=orderservice
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
